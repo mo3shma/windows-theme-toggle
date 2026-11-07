@@ -10,6 +10,10 @@ A tiny Windows 11 tray app. Click the sun/moon icon to switch between light and 
 2. Run it. On first launch it asks whether to start with Windows.
 3. Left-click the tray icon to toggle the theme. Right-click for "Schedule...", "Start with Windows" and Exit.
 
+### Updates
+
+The app checks this repo's latest GitHub release shortly after start and then daily. If a newer version exists it asks before downloading and replacing itself. Right-click the icon for "Check for updates now" or to turn the automatic check off. Only a request to the GitHub API is made; nothing about you is sent.
+
 ### Schedule
 
 Right-click the icon, choose **Schedule...**, tick the box and pick the time for light mode and the time for dark mode. The app then switches by itself at those times (it must be running, so enable "Start with Windows"). A manual click still works and stays until the next scheduled switch. Times can span midnight, e.g. dark at 20:00 and light at 06:00.
@@ -35,4 +39,5 @@ Windows 11 does not let third-party apps add tiles to Quick Settings, so a tray 
 ## License
 
 MIT
+
 
