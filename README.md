@@ -8,7 +8,11 @@ A tiny Windows 11 tray app. Click the sun/moon icon to switch between light and 
 
 1. Download `ThemeToggle.exe` from the [latest release](../../releases/latest).
 2. Run it. On first launch it asks whether to start with Windows.
-3. Left-click the tray icon to toggle the theme. Right-click for "Start with Windows" and Exit.
+3. Left-click the tray icon to toggle the theme. Right-click for "Schedule...", "Start with Windows" and Exit.
+
+### Schedule
+
+Right-click the icon, choose **Schedule...**, tick the box and pick the time for light mode and the time for dark mode. The app then switches by itself at those times (it must be running, so enable "Start with Windows"). A manual click still works and stays until the next scheduled switch. Times can span midnight, e.g. dark at 20:00 and light at 06:00.
 
 `ThemeToggle.exe --toggle` switches once and exits, handy for shortcuts and scripts.
 
@@ -31,3 +35,4 @@ Windows 11 does not let third-party apps add tiles to Quick Settings, so a tray 
 ## License
 
 MIT
+

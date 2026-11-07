@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -10,8 +11,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Theme Toggle")]
 [assembly: AssemblyDescription("Tray icon that toggles Windows light/dark theme")]
 [assembly: AssemblyProduct("Theme Toggle")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 // Tray icon: left-click toggles Windows light/dark. Right-click: autostart / exit.
 // "ThemeToggle.exe --toggle" toggles once and exits (for scripts/shortcuts).
@@ -22,6 +23,8 @@ static class ThemeToggle
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     static extern IntPtr SendMessageTimeout(IntPtr h, uint m, UIntPtr w, string l, uint f, uint t, out UIntPtr r);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
 
     static bool IsLight()
@@ -30,16 +33,34 @@ static class ThemeToggle
             return Convert.ToInt32(k.GetValue("AppsUseLightTheme", 1)) == 1;
     }
 
-    static void Toggle()
+    static void Toggle() { SetTheme(!IsLight()); }
+
+    static void SetTheme(bool light)
     {
-        int v = IsLight() ? 0 : 1;
+        int v = light ? 1 : 0;
         using (var k = Registry.CurrentUser.OpenSubKey(Personalize, true))
         {
             k.SetValue("AppsUseLightTheme", v, RegistryValueKind.DWord);
             k.SetValue("SystemUsesLightTheme", v, RegistryValueKind.DWord);
         }
+        // shortcut: fixed 300 ms gap before the 2nd broadcast, raise if some shells still lag.
+        Broadcast();
+        Thread.Sleep(300);
+        Broadcast();
+    }
+
+    // Tell every window, and each monitor's taskbar directly, to re-read the theme.
+    // The plain broadcast alone left secondary-monitor taskbars unchanged on some PCs.
+    static void Broadcast()
+    {
         UIntPtr r;
         SendMessageTimeout((IntPtr)0xffff, 0x1A, UIntPtr.Zero, "ImmersiveColorSet", 2, 5000, out r);
+        foreach (string cls in new[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" })
+        {
+            IntPtr h = IntPtr.Zero;
+            while ((h = FindWindowEx(IntPtr.Zero, h, cls, null)) != IntPtr.Zero)
+                SendMessageTimeout(h, 0x1A, UIntPtr.Zero, "ImmersiveColorSet", 2, 2000, out r);
+        }
     }
 
     static Icon MakeIcon()
@@ -108,6 +129,83 @@ static class ThemeToggle
         }
     }
 
+    // ---- Schedule: light from LightAt until DarkAt, dark otherwise (may span midnight). ----
+    const string AppKey = @"Software\ThemeToggle";
+    static bool SchedOn;
+    static TimeSpan LightAt = new TimeSpan(7, 0, 0), DarkAt = new TimeSpan(19, 0, 0);
+
+    static TimeSpan ReadTime(RegistryKey k, string name, TimeSpan fallback)
+    {
+        TimeSpan t;
+        return TimeSpan.TryParse(k.GetValue(name) as string, CultureInfo.InvariantCulture, out t) ? t : fallback;
+    }
+
+    static void LoadSchedule()
+    {
+        using (var k = Registry.CurrentUser.CreateSubKey(AppKey))
+        {
+            SchedOn = Convert.ToInt32(k.GetValue("ScheduleOn", 0)) == 1;
+            LightAt = ReadTime(k, "LightAt", LightAt);
+            DarkAt = ReadTime(k, "DarkAt", DarkAt);
+        }
+    }
+
+    static void SaveSchedule()
+    {
+        using (var k = Registry.CurrentUser.CreateSubKey(AppKey))
+        {
+            k.SetValue("ScheduleOn", SchedOn ? 1 : 0, RegistryValueKind.DWord);
+            k.SetValue("LightAt", LightAt.ToString(@"hh\:mm"));
+            k.SetValue("DarkAt", DarkAt.ToString(@"hh\:mm"));
+        }
+    }
+
+    static bool ScheduledLight(TimeSpan t)
+    {
+        return LightAt < DarkAt ? (t >= LightAt && t < DarkAt) : (t >= LightAt || t < DarkAt);
+    }
+
+    // Returns true if the user saved changes.
+    static bool ShowScheduleDialog()
+    {
+        var f = new Form
+        {
+            Text = "Theme Toggle schedule", FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterScreen, MaximizeBox = false, MinimizeBox = false,
+            ClientSize = new Size(300, 170), ShowInTaskbar = true
+        };
+        var on = new CheckBox { Text = "Switch automatically at these times", Left = 16, Top = 16, Width = 270, Checked = SchedOn };
+        Func<string, TimeSpan, int, DateTimePicker> row = delegate(string label, TimeSpan t, int top)
+        {
+            f.Controls.Add(new Label { Text = label, Left = 16, Top = top + 4, Width = 120 });
+            var p = new DateTimePicker
+            {
+                Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true,
+                Left = 150, Top = top, Width = 80, Value = DateTime.Today + t
+            };
+            f.Controls.Add(p);
+            return p;
+        };
+        var light = row("Light mode at", LightAt, 52);
+        var dark = row("Dark mode at", DarkAt, 88);
+        var ok = new Button { Text = "Save", Left = 130, Top = 130, Width = 75 };
+        var cancel = new Button { Text = "Cancel", Left = 212, Top = 130, Width = 75, DialogResult = DialogResult.Cancel };
+        ok.Click += delegate
+        {
+            if (light.Value.TimeOfDay == dark.Value.TimeOfDay)
+            {
+                MessageBox.Show("Light and dark times must be different.", "Theme Toggle");
+                return;
+            }
+            SchedOn = on.Checked; LightAt = light.Value.TimeOfDay; DarkAt = dark.Value.TimeOfDay;
+            SaveSchedule();
+            f.DialogResult = DialogResult.OK;
+        };
+        f.AcceptButton = ok; f.CancelButton = cancel;
+        f.Controls.AddRange(new Control[] { on, ok, cancel });
+        using (f) return f.ShowDialog() == DialogResult.OK;
+    }
+
     [STAThread]
     static void Main(string[] args)
     {
@@ -123,6 +221,18 @@ static class ThemeToggle
             var tray = new NotifyIcon { Icon = MakeIcon(), Text = "Click: toggle light/dark", Visible = true };
             Action refresh = delegate { var old = tray.Icon; tray.Icon = MakeIcon(); old.Dispose(); };
 
+            // Apply the schedule when its desired state changes, so a manual click stays until the next switch time.
+            LoadSchedule();
+            bool? last = null;
+            Action tick = delegate
+            {
+                if (!SchedOn) { last = null; return; }
+                bool want = ScheduledLight(DateTime.Now.TimeOfDay);
+                if (last == want) return;
+                last = want;
+                if (IsLight() != want) { SetTheme(want); refresh(); }
+            };
+
             tray.MouseClick += delegate(object s, MouseEventArgs e)
             {
                 if (e.Button == MouseButtons.Left) { Toggle(); refresh(); }
@@ -132,6 +242,10 @@ static class ThemeToggle
             var auto = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true };
             menu.Opening += delegate { auto.Checked = Autostart; };
             auto.Click += delegate { SetAutostart(auto.Checked); };
+            menu.Items.Add("Schedule...", null, delegate
+            {
+                if (ShowScheduleDialog()) { last = null; tick(); }
+            });
             menu.Items.Add(auto);
             menu.Items.Add("Exit", null, delegate { tray.Visible = false; Application.Exit(); });
             tray.ContextMenuStrip = menu;
@@ -139,7 +253,13 @@ static class ThemeToggle
             // Keep the icon right when the theme is changed elsewhere (Settings, hotkeys).
             SystemEvents.UserPreferenceChanged += delegate { refresh(); };
 
+            var timer = new System.Windows.Forms.Timer { Interval = 30000 };
+            timer.Tick += delegate { tick(); };
+            timer.Start();
+            tick();
+
             Application.Run();
+            timer.Dispose();
             tray.Dispose();
         }
     }
