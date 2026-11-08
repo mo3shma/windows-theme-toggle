@@ -15,8 +15,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Theme Toggle")]
 [assembly: AssemblyDescription("Tray icon that toggles Windows light/dark theme")]
 [assembly: AssemblyProduct("Theme Toggle")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.2.1.0")]
+[assembly: AssemblyFileVersion("1.2.1.0")]
 
 // Tray icon: left-click toggles Windows light/dark. Right-click: autostart / exit.
 // "ThemeToggle.exe --toggle" toggles once and exits (for scripts/shortcuts).
@@ -51,6 +51,8 @@ static class ThemeToggle
         Broadcast();
         Thread.Sleep(300);
         Broadcast();
+        Thread.Sleep(700);   // secondary taskbars sometimes only react to a late third pass
+        Broadcast();
     }
 
     // Tell every window, and each monitor's taskbar directly, to re-read the theme.
@@ -63,9 +65,23 @@ static class ThemeToggle
         {
             IntPtr h = IntPtr.Zero;
             while ((h = FindWindowEx(IntPtr.Zero, h, cls, null)) != IntPtr.Zero)
-                SendMessageTimeout(h, 0x1A, UIntPtr.Zero, "ImmersiveColorSet", 2, 2000, out r);
+            {
+                // Secondary taskbars ignored the top-level message; also hit every child and send WM_THEMECHANGED.
+                Notify(h);
+                EnumChildWindows(h, delegate(IntPtr c, IntPtr l) { Notify(c); return true; }, IntPtr.Zero);
+            }
         }
     }
+
+    static void Notify(IntPtr h)
+    {
+        UIntPtr r;
+        SendMessageTimeout(h, 0x1A, UIntPtr.Zero, "ImmersiveColorSet", 2, 2000, out r);
+        SendMessageTimeout(h, 0x31A, UIntPtr.Zero, null, 2, 2000, out r);
+    }
+
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr l);
 
     static Icon MakeIcon()
     {
